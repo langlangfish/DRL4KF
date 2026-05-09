@@ -1,0 +1,16 @@
+# @package _group_
+verbose: 2
+policy: "MultiInputLstmPolicy"
+clip_range_vf: 0.2
+ent_coef: 0.01 # 熵正则参数
+aux_coef: 0.1
+seed: 12
+training_envs : 1
+n_epochs: 10
+n_steps : 512
+batch_size: 128
+gamma: 0.98
+gae_lambda: 0.95
+max_grad_norm: 0.6
+sde_sample_freq: 8
+target_kl: 0.03

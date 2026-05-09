@@ -1,0 +1,1062 @@
+from src.model.env import Haige_AKF
+from src.utils.funcs.haige_utilis import recording_results_ecef
+# Your code starts here
+from src.utils.package import OnPolicyAlgorithm, Dict, Type, BasePolicy, MlpLstmPolicy, CnnLstmPolicy, \
+    MultiInputLstmPolicy, RecurrentActorCriticPolicy, Union, GymEnv, Schedule, Optional, Any, th, \
+    spaces, RecurrentDictRolloutBuffer, gym, RecurrentRolloutBuffer, RNNStates, get_schedule_fn, MaybeCallback, Tuple, \
+    BaseCallback, EvalCallback, VecEnv, RolloutBuffer, deepcopy, obs_as_tensor, np, explained_variance, \
+    pathlib, \
+    io, load_from_zip_file, recursive_getattr, recursive_setattr, Logger, cast, make_output_format, \
+    get_latest_run_id, os, time, sys, safe_mean, deque, \
+    Path, pd, VecNormalize, tqdm, Monitor, SubprocVecEnv, SummaryWriter, \
+    sync_envs_normalization, DictConfig, logging,evaluate_policy,datetime
+from src.utils.funcs.lly_utilis import timing_minutes
+
+
+
+class _Logger_(Logger):
+    def __init__(self, folder: Optional[str], format_strings=None, writer: Optional[SummaryWriter] = None):
+        log_suffix = ""
+        format_strings = ["stdout", "tensorboard"] if format_strings is None else format_strings
+        format_strings = list(filter(None, format_strings))
+        output_formats = [make_output_format(f, folder, log_suffix) for f in format_strings]
+        super().__init__(folder, output_formats)
+        self.writer = writer
+
+    def per_rollout_step_record(self, rollout_step_indicator: Dict[str, Any]):
+        for key, value in rollout_step_indicator.items():
+            self.record(key, value)
+
+    def per_epoch_record(self, per_epoch_step_indicator: Dict[str, Any]):
+        for key, value in per_epoch_step_indicator.items():
+            self.record(key, value)
+
+    def per_train_record(self, per_train_indicator: Dict[str, Any], iteration: int):
+        for key, value in per_train_indicator.items():
+            self.record(key, value)
+            self.writer.add_scalar(key, value, iteration)
+
+    def per_learning_end_record(self, per_learning_end_indicator: Dict[str, Any]):
+        for key, value in per_learning_end_indicator.items():
+            self.record(key, value)
+
+
+
+class RecurrentPPO(OnPolicyAlgorithm):
+    """
+    Proximal Policy Optimization algorithm (PPO) (clip version)
+    with support for recurrent policies (LSTM).
+
+    Based on the original Stable Baselines 3 implementation.
+
+    Introduction to PPO: https://spinningup.openai.com/en/latest/algorithms/ppo.html
+
+    :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
+    :param env: The environment to learn.yaml from (if registered in Gym, can be str)
+    :param learning_rate: The learning rate, it can be a function
+        of the current progress remaining (from 1 to 0)
+    :param n_steps: The number of steps to run for each environment per update
+        (i.e. batch size is n_steps * n_env where n_env is number of environment copies running in parallel)
+    :param batch_size: Minibatch size
+    :param n_epochs: Number of epoch when optimizing the surrogate loss
+    :param gamma: Discount factor
+    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
+    :param clip_range: Clipping parameter, it can be a function of the current progress
+        remaining (from 1 to 0).
+    :param clip_range_vf: Clipping parameter for the value function,
+        it can be a function of the current progress remaining (from 1 to 0).
+        This is a parameter specific to the OpenAI implementation. If None is passed (default),
+        no clipping will be done on the value function.
+        IMPORTANT: this clipping depends on the reward scaling.
+    :param normalize_advantage: Whether to normalize or not the advantage
+    :param ent_coef: Entropy coefficient for the loss calculation
+    :param vf_coef: Value function coefficient for the loss calculation
+    :param max_grad_norm: The maximum value for the gradient clipping
+    :param target_kl: Limit the KL divergence between updates,
+        because the clipping is not enough to prevent large update
+        see issue #213 (cf https://github.com/hill-a/stable-baselines/issues/213)
+        By default, there is no limit on the kl div.
+    :param tensorboard_log: the log location for tensorboard (if None, no logging)
+    :param create_eval_env: Whether to create a second environment that will be
+        used for evaluating the agent periodically. (Only available when passing string for the environment)
+    :param policy_kwargs: additional arguments to be passed to the policy on creation
+    :param verbose: the verbosity level: 0 no output, 1 info, 2 debug
+    :param seed: Seed for the pseudo random generators
+    :param device: Device (cpu, cuda, ...) on which the code should be run.
+        Setting it to auto, the code will be run on the GPU if possible.
+    :param _init_setup_model: Whether or not to build the network at the creation of the instance
+    """
+    logger:_Logger_
+    policy:RecurrentActorCriticPolicy
+    callback:"MyCustomCallback"
+
+    policy_aliases: Dict[str, Type[BasePolicy]] = {
+        "MlpLstmPolicy": MlpLstmPolicy,
+        "CnnLstmPolicy": CnnLstmPolicy,
+        "MultiInputLstmPolicy": MultiInputLstmPolicy,
+    }
+
+    def __init__(
+        self,
+        policy: Union[str, Type[RecurrentActorCriticPolicy]],
+        env: Union[GymEnv, str],
+        learning_rate: Union[float, Schedule] = 3e-4,
+        n_steps: int = 128,
+        batch_size: Optional[int] = 128,
+        n_epochs: int = 10,
+        gamma: float = 0.99,
+        gae_lambda: float = 0.95,
+        clip_range: Union[float, Schedule] = 0.2,
+        clip_range_vf: Union[None, float, Schedule] = None,
+        normalize_advantage: bool = True,
+        ent_coef: float = 0.0, # 0
+        vf_coef: float = 0.5,
+        max_grad_norm: float = 0.5,
+        use_sde: bool = False,
+        sde_sample_freq: int = -1,
+        target_kl: Optional[float] = None,
+        tensorboard_log: Optional[str] = None,
+        create_eval_env: bool = False,
+        policy_kwargs: Optional[Dict[str, Any]] = None,
+        verbose: int = 0,
+        seed: Optional[int] = None,
+        device: Union[th.device, str] = "auto",
+        _init_setup_model: bool = True,
+        **kwargs
+    ):
+        super().__init__(
+            policy,
+            env,
+            learning_rate=learning_rate,
+            n_steps=n_steps,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            ent_coef=ent_coef,
+            vf_coef=vf_coef,
+            max_grad_norm=max_grad_norm,
+            use_sde=use_sde,
+            sde_sample_freq=sde_sample_freq,
+            tensorboard_log=tensorboard_log,
+            create_eval_env= create_eval_env,
+            policy_kwargs=policy_kwargs,
+            verbose=verbose,
+            seed=seed,
+            device=device,
+            _init_setup_model=False,
+            supported_action_spaces=(
+                spaces.Box,
+                spaces.Discrete,
+                spaces.MultiDiscrete,
+                spaces.MultiBinary,
+            ),
+        )
+
+        self._states = None
+        self._obs = None
+        self.aux_coef = kwargs.get('aux_coef')
+        self.iteration = None
+        self.batch_size = batch_size
+        self.n_epochs = n_epochs
+        self.clip_range = clip_range
+        self.clip_range_vf = clip_range_vf
+        self.normalize_advantage = normalize_advantage
+        self.target_kl = target_kl
+        self._last_lstm_states = None
+        if 'ATF_trig' in self.policy_kwargs:
+            self.ATF_trig = policy_kwargs['ATF_trig']
+            policy_kwargs.pop('ATF_trig')
+
+        if _init_setup_model:
+            self._setup_model()
+
+    def _setup_model(self) -> None:
+        self._setup_lr_schedule()
+        self.set_random_seed(self.seed)
+        self.writer = SummaryWriter(log_dir=self.tensorboard_log)
+        buffer_cls = (
+            RecurrentDictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else RecurrentRolloutBuffer
+        )
+
+        policy = self.policy_class(
+            self.observation_space,
+            self.action_space,
+            self.lr_schedule,
+            use_sde=self.use_sde,
+            **self.policy_kwargs,  # pytype:disable=not-instantiable
+        )
+        self.policy = cast(RecurrentActorCriticPolicy, policy)
+        self.policy = self.policy.to(self.device)
+
+        # We assume that LSTM for the actor and the critic
+        # have the same architecture
+        lstm = self.policy.lstm_actor
+        self.scheduler = th.optim.lr_scheduler.StepLR(self.policy.optimizer, step_size=1e5, gamma=0.9) # step_size=5e4
+
+        if not isinstance(self.policy, RecurrentActorCriticPolicy):
+            raise ValueError("Policy must subclass RecurrentActorCriticPolicy")
+
+        single_hidden_state_shape = (lstm.num_layers, self.n_envs, lstm.hidden_size)
+        # hidden and cell states for actor and critic
+        self._last_lstm_states = RNNStates(
+            (
+                th.zeros(single_hidden_state_shape).to(self.device),
+                th.zeros(single_hidden_state_shape).to(self.device),
+            ),
+            (
+                th.zeros(single_hidden_state_shape).to(self.device),
+                th.zeros(single_hidden_state_shape).to(self.device),
+            ),
+        )
+
+        hidden_state_buffer_shape = (self.n_steps, lstm.num_layers, self.n_envs, lstm.hidden_size)
+
+        self.rollout_buffer = buffer_cls(
+            self.n_steps,
+            self.observation_space,
+            self.action_space,
+            hidden_state_buffer_shape,
+            self.device,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+            n_envs=self.n_envs,
+        )
+
+        # Initialize schedules for policy/value clipping
+        self.clip_range = get_schedule_fn(self.clip_range)
+        if self.clip_range_vf is not None:
+            if isinstance(self.clip_range_vf, (float, int)):
+                assert self.clip_range_vf > 0, "`clip_range_vf` must be positive, pass `None` to deactivate vf clipping"
+
+            self.clip_range_vf = get_schedule_fn(self.clip_range_vf)
+
+    def _setup_learn(
+        self,
+        total_timesteps: int,
+        eval_env: Optional[GymEnv],
+        callback: MaybeCallback = None,
+        eval_freq: int = 10000,
+        n_eval_episodes: int = 5,
+        log_path: Optional[str] = None,
+        reset_num_timesteps: bool = True,
+        tb_log_name: str = "RecurrentPPO",
+        progress_bar: bool = False
+    ) -> Tuple[int, BaseCallback]:
+        """
+        Initialize different variables needed for training.
+
+        :param total_timesteps: The total number of samples (env steps) to train on
+        :param eval_env: Environment to use for evaluation.
+        :param callback: Callback(s) called at every step with state of the algorithm.
+        :param eval_freq: How many steps between evaluations
+        :param n_eval_episodes: How many episodes to play per evaluation
+        :param log_path: Path to a folder where the evaluations will be saved
+        :param reset_num_timesteps: Whether to reset or not the ``num_timesteps`` attribute
+        :param tb_log_name: the name of the run for tensorboard log
+        :return:
+        """
+
+        latest_run_id = get_latest_run_id(log_path, tb_log_name)
+        if not reset_num_timesteps:
+            # Continue training in the same directory
+            latest_run_id -= 1
+        save_path = os.path.join(log_path, f"{tb_log_name}_{latest_run_id + 1}")
+        _logger_ = _Logger_(folder=save_path, format_strings=None, writer=self.writer)
+        self.set_logger(_logger_)
+        if eval_env is not None or eval_freq != -1:
+            _logger_.warn(
+                "Parameters `eval_env` and `eval_freq` are deprecated and will be removed in the future. "
+                "Please use `EvalCallback` or a custom Callback instead.",
+                DeprecationWarning,
+                # By setting the `stacklevel` we refer to the initial caller of the deprecated feature.
+                # This causes the the `DepricationWarning` to not be ignored and to be shown to the user. See
+                # https://github.com/DLR-RM/stable-baselines3/pull/1082#discussion_r989842855 for more details.
+            )
+
+        self.start_time = time.time_ns()
+
+        if self.ep_info_buffer is None or reset_num_timesteps:
+            # Initialize buffers if they don't exist, or reinitialize if resetting counters
+            self.ep_info_buffer = deque(maxlen=100)
+            self.ep_success_buffer = deque(maxlen=100)
+
+        if self.action_noise is not None:
+            self.action_noise.reset()
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+            self._episode_num = 0
+        else:
+            # Make sure training timesteps are ahead of the internal counter
+            total_timesteps += self.num_timesteps
+        self._total_timesteps = total_timesteps
+        self._num_timesteps_at_start = self.num_timesteps
+
+        # Avoid resetting the environment when calling ``.learn()`` consecutive times
+        if reset_num_timesteps or self._last_obs is None:
+            self._last_obs = self.env.reset()  # pytype: disable=annotation-type-mismatch
+            self._last_episode_starts = np.ones((self.env.num_envs,), dtype=bool)
+            # Retrieve unnormalized observation for saving into the buffer
+            if self._vec_normalize_env is not None:
+                self._last_original_obs = self._vec_normalize_env.get_original_obs()
+
+        if eval_env is not None and self.seed is not None:
+            eval_env.seed(self.seed)
+
+        # Create eval callback if needed
+        callback.logger = _logger_
+        return total_timesteps, callback
+
+
+    def collect_rollouts(
+        self,
+        env: VecEnv,
+        callback: BaseCallback,
+        rollout_buffer: RolloutBuffer,
+        n_rollout_steps: int,
+    ) -> bool:
+        """
+        Collect experiences using the current policy and fill a ``RolloutBuffer``.
+        The term rollout here refers to the model-free notion and should not
+        be used with the concept of rollout used in model-based RL or planning.
+
+        :param env: The training environment
+        :param callback: Callback that will be called at each step
+            (and at the beginning and end of the rollout)
+        :param rollout_buffer: Buffer to fill with rollouts
+        :param n_steps: Number of experiences to collect per environment
+        :return: True if function returned with at least `n_rollout_steps`
+            collected, False if callback terminated rollout prematurely.
+        """
+        callback:MyCustomCallback
+        assert isinstance(
+            rollout_buffer, (RecurrentRolloutBuffer, RecurrentDictRolloutBuffer)
+        ), f"{rollout_buffer} doesn't support recurrent policy"
+
+        assert self._last_obs is not None, "No previous observation was provided"
+        # Switch to eval mode (this affects batch norm / dropout)
+        self.policy.set_training_mode(False)
+
+        n_steps = 0
+        rollout_buffer.reset()
+        # Sample new weights for the state dependent exploration
+        if self.use_sde:
+            self.policy.reset_noise(env.num_envs)
+
+        callback.on_rollout_start()
+
+        lstm_states = deepcopy(self._last_lstm_states)
+
+        while n_steps < n_rollout_steps:
+            if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
+                # Sample a new noise matrix
+                self.policy.reset_noise(env.num_envs)
+
+            with th.no_grad():
+                # Convert to pytorch tensor or to TensorDict
+                obs_tensor = obs_as_tensor(self._last_obs, self.device)
+                episode_starts = th.tensor(self._last_episode_starts).float().to(self.device)
+                actions, values, log_probs, lstm_states = self.policy.forward(obs_tensor, lstm_states, episode_starts)
+
+            actions = actions.cpu().numpy()
+
+            # Rescale and perform action
+            clipped_actions = actions
+            # Clip the actions to avoid out of bound error
+            if isinstance(self.action_space, gym.spaces.Box):
+                clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+
+            # if log_probs < -7:
+            #     clipped_actions *= 0
+
+            new_obs, rewards, dones, infos = env.step(clipped_actions)
+            # recording rewards per step # remote edition 20221021
+            # self.logger.record("values/rewards per step", np.mean(rewards))
+            # self.logger.record("values/rl positioning error per step", infos[0]['error'])
+            # self.logger.record("values/trip_id", infos[0]['traj_idx'])
+            # self.logger.record('values/per_epoch_log_prob', log_probs.cpu().numpy().item())
+            self.num_timesteps += env.num_envs
+
+            # Give access to local variables
+            callback.update_locals(locals())
+
+            # if callback.on_step() is False:
+            #     return False
+
+            self._update_info_buffer(infos)
+            n_steps += 1
+
+            # if isinstance(self.action_space, gym.spaces.Discrete):
+            #     # Reshape in case of discrete action
+            #     actions = actions.reshape(-1, 1)
+
+            # Handle timeout by bootstraping with value function
+            # see GitHub issue #633
+            for idx, done_ in enumerate(dones):
+                if (
+                    done_
+                    and infos[idx].get("terminal_observation") is not None
+                    and infos[idx].get("TimeLimit.truncated", False)
+                ):
+                    terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
+                    with th.no_grad():
+                        terminal_lstm_state = (
+                            lstm_states.vf[0][:, idx : idx + 1, :],
+                            lstm_states.vf[1][:, idx : idx + 1, :],
+                        )
+                        # terminal_lstm_state = None
+                        episode_starts = th.tensor([False]).float().to(self.device)
+                        terminal_value = self.policy.predict_values(terminal_obs, terminal_lstm_state, episode_starts)[0]
+                    rewards[idx] += self.gamma * terminal_value
+
+            # can not find mask 221021 (no mask in standard ppo
+            rollout_buffer.add(
+                self._last_obs,
+                actions,
+                rewards,
+                self._last_episode_starts,
+                values,
+                log_probs,
+                lstm_states=self._last_lstm_states,
+            )
+
+            self._last_obs = new_obs
+            self._last_episode_starts = dones
+            self._last_lstm_states = lstm_states
+
+        with th.no_grad():
+            # Compute value for the last timestep
+            episode_starts = th.tensor(dones).float().to(self.device)
+            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device), lstm_states.vf, episode_starts)
+
+        rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
+
+        callback.on_rollout_end()
+
+        return True
+
+    def train(self) -> None:
+        """
+        Update policy using the currently gathered rollout buffer.
+        """
+        # Switch to train mode (this affects batch norm / dropout)
+        self.policy.set_training_mode(True)
+        # Update optimizer learning rate
+        # self._update_learning_rate(self.policy.optimizer)
+        # Compute current clip range
+        clip_range = self.clip_range(self._current_progress_remaining)
+        # Optional: clip range for the value function
+        if self.clip_range_vf is not None:
+            clip_range_vf = self.clip_range_vf(self._current_progress_remaining)
+
+        entropy_losses = []
+        pg_losses, value_losses = [], []
+        clip_fractions = []
+
+        continue_training = True
+
+        # train for n_epochs epochs
+        for epoch in range(self.n_epochs):
+            approx_kl_divs = []
+            # Do a complete pass on the rollout buffer
+            for rollout_data in self.rollout_buffer.get(self.batch_size):
+                actions = rollout_data.actions
+                if isinstance(self.action_space, spaces.Discrete):
+                    # Convert discrete action from float to long
+                    actions = rollout_data.actions.long().flatten()
+
+                # Convert mask from float to bool
+                mask = rollout_data.mask > 1e-8
+
+                # Re-sample the noise matrix because the log_std has changed
+                if self.use_sde:
+                    self.policy.reset_noise(self.batch_size)
+
+                values, log_prob, entropy = self.policy.evaluate_actions(
+                    rollout_data.observations,
+                    actions,
+                    rollout_data.lstm_states,
+                    rollout_data.episode_starts,
+                )
+
+                values = values.flatten()
+                # Normalize advantage
+                advantages = rollout_data.advantages
+                if self.normalize_advantage:
+                    advantages = (advantages - advantages[mask].mean()) / (advantages[mask].std() + 1e-8)
+
+                # ratio between old and new policy, should be one at the first iteration
+                ratio = th.exp(log_prob - rollout_data.old_log_prob)
+
+                # clipped surrogate loss
+                policy_loss_1 = advantages * ratio
+                policy_loss_2 = advantages * th.clamp(ratio, 1 - clip_range, 1 + clip_range)
+                policy_loss = -th.mean(th.min(policy_loss_1, policy_loss_2)[mask])
+
+                # Logging
+                pg_losses.append(policy_loss.item())
+                clip_fraction = th.mean((th.abs(ratio - 1) > clip_range).float()[mask]).item()
+                clip_fractions.append(clip_fraction)
+
+                if self.clip_range_vf is None:
+                    # No clipping
+                    values_pred = values
+                else:
+                    # Clip the different between old and new value
+                    # NOTE: this depends on the reward scaling
+                    values_pred = rollout_data.old_values + th.clamp(
+
+                        values - rollout_data.old_values, -clip_range_vf, clip_range_vf
+                    )
+                # Value loss using the TD(gae_lambda) target
+                # Mask padded sequences
+                value_loss = th.mean(((rollout_data.returns - values_pred) ** 2)[mask])
+
+                # added recordings 20221021
+                # self.logger.record('values/perepoch_values', th.mean(values[mask]).item())
+                # self.logger.record('values/perepoch_values_pred', np.float(th.mean(values_pred[mask])))
+                # self.logger.record('values/perepoch_returns', th.mean(rollout_data.returns[mask]).item())
+                # self.logger.record("train/learning_rate", self.policy.optimizer.state_dict()['param_groups'][0]['lr'])
+
+                value_losses.append(value_loss.item())
+
+                # Entropy loss favor exploration
+                if entropy is None:
+                    # Approximate entropy when no analytical form
+                    entropy_loss = -th.mean(-log_prob[mask])
+                else:
+                    entropy_loss = -th.mean(entropy[mask])
+
+                entropy_losses.append(entropy_loss.item())
+
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+
+                # Calculate approximate form of reverse KL Divergence for early stopping
+                # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
+                # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
+                # and Schulman blog: http://joschu.net/blog/kl-approx.html
+                with th.no_grad():
+                    log_ratio = log_prob - rollout_data.old_log_prob
+                    approx_kl_div = th.mean(((th.exp(log_ratio) - 1) - log_ratio)[mask]).cpu().numpy()
+                    approx_kl_divs.append(approx_kl_div)
+
+                if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
+                    continue_training = False
+                    if self.verbose >= 1:
+                        print(f"Early stopping at step {epoch} due to reaching max kl: {approx_kl_div:.2f}")
+                    break
+
+                # Optimization step
+                # if value_loss.item() > 3e3: # 如果value loss过大不稳定，不训练
+                #     print(f'value loss={value_loss.item()},continue')
+                #     print(self.env.buf_infos[0]['tripIDnum'])
+                #     continue
+                self.policy.optimizer.zero_grad()
+                loss.backward()
+                # Clip grad norm
+                th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                self.policy.optimizer.step()
+                # self.scheduler.step()
+
+                per_epoch_indicator = {
+                    'values/perepoch_values': th.mean(values[mask]).item(),
+                    'values/perepoch_values_pred': np.float(th.mean(values_pred[mask])),
+                    'values/perepoch_returns': th.mean(rollout_data.returns[mask]).item(),
+                    'learn/learning_rate': self.policy.optimizer.state_dict()['param_groups'][0]['lr'],
+                }
+                self.logger.per_epoch_record(per_epoch_indicator)
+            # if not continue_training:
+            #     break
+
+        self._n_updates += self.n_epochs
+        explained_var = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
+
+        # Logs
+        # self.logger.record("train/entropy_loss", np.mean(entropy_losses))
+        # self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
+        # self.logger.record("train/value_loss", np.mean(value_losses))
+        # self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
+        # self.logger.record("train/clip_fraction", np.mean(clip_fractions))
+        # self.logger.record("train/loss", loss.item())
+        # self.logger.record("train/explained_variance", explained_var)
+        # if hasattr(self.policy, "log_std"):
+        #     self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
+        #
+        # self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
+        # self.logger.record("train/clip_range", clip_range)
+        # if self.clip_range_vf is not None:
+        #     self.logger.record("train/clip_range_vf", clip_range_vf)
+        # # added recordings 20221021
+        # self.logger.record('values/values', th.mean(values[mask]).item())
+        # self.logger.record('values/values_pred', np.float(th.mean(values_pred[mask])))
+        # self.logger.record('values/returns_target', th.mean(rollout_data.returns[mask]).item())
+        per_train_indicator = {
+            "learn/entropy_loss": np.mean(entropy_losses),
+            "learn/policy_gradient_loss": np.mean(pg_losses),
+            "learn/value_loss": np.mean(value_losses),
+            "learn/approx_kl": np.mean(approx_kl_divs),
+            "learn/clip_factor": np.mean(clip_fractions),
+            "learn/loss": loss.item(),
+            "learn/explained_variance": explained_var,
+            "learn/n_updates": self._n_updates,
+            "learn/clip_range": clip_range,
+            "learn/clip_range_vf": clip_range_vf,
+            "values/values": th.mean(values[mask]).item(),
+            "values/values_pred": np.float(th.mean(values_pred[mask])),
+            "values/returns": th.mean(rollout_data.returns[mask]).item(),
+        }
+        self.logger.per_train_record(per_train_indicator, self.iteration)
+
+    def learn(
+        self,
+        total_timesteps: int,
+        callback: EvalCallback = None,
+        log_interval: int = 1,
+        eval_env: Optional[GymEnv] = None,
+        eval_freq: int = -1,
+        n_eval_episodes: int = 5,
+        tb_log_name: str = "RecurrentPPO",
+        log_path: Optional[str] = None,
+        reset_num_timesteps: bool = True,
+        progress_bar: bool =False
+    ) -> "RecurrentPPO":
+        callback:MyCustomCallback
+        self.iteration = 0
+        total_timesteps, callback = self._setup_learn(
+            total_timesteps, eval_env, callback, eval_freq, n_eval_episodes, log_path, reset_num_timesteps, tb_log_name,progress_bar
+        )
+
+        callback.on_training_start(locals(), globals())
+
+        while self.iteration < total_timesteps:  # 改：self.num_timesteps——>iteration
+            # if iteration % 3 == 0:
+            self.collect_rollouts(self.env, callback, self.rollout_buffer,
+                                  n_rollout_steps=self.n_steps)
+
+            self._update_current_progress_remaining(self.iteration, total_timesteps)
+            self.train()
+            self.iteration += 1
+            callback.update_locals(locals())
+            if not callback.on_step():
+                break
+        callback.on_training_end()
+        return self
+
+    def load(
+        self,
+        path: Union[str, pathlib.Path, io.BufferedIOBase],
+        env: Optional[GymEnv] = None,
+        device: Union[th.device, str] = "auto",
+        custom_objects: Optional[Dict[str, Any]] = None,
+        print_system_info: bool = False,
+        force_reset: bool = True,
+        **kwargs,
+    ):
+        """
+        Load the model from a zip-file.
+        Warning: ``load`` re-creates the model from scratch, it does not update it in-place!
+        For an in-place load use ``set_parameters`` instead.
+
+        :param path: path to the file (or a file-like) where to
+            load the agent from
+        :param env: the new environment to run the loaded model on
+            (can be None if you only need prediction from a trained model) has priority over any saved environment
+        :param device: Device on which the code should run.
+        :param custom_objects: Dictionary of objects to replace
+            upon loading. If a variable is present in this dictionary as a
+            key, it will not be deserialized and the corresponding item
+            will be used instead. Similar to custom_objects in
+            ``keras.models.load_model``. Useful when you have an object in
+            file that can not be deserialized.
+        :param print_system_info: Whether to print system info from the saved model
+            and the current system info (useful to debug loading issues)
+        :param force_reset: Force call to ``reset()`` before training
+            to avoid unexpected behavior.
+            See https://github.com/DLR-RM/stable-baselines3/issues/597
+        :param kwargs: extra arguments to change the model when loading
+        :return: new model instance with loaded parameters
+        """
+        data, params, pytorch_variables = load_from_zip_file(
+            path,
+            device=device,
+            custom_objects=custom_objects,
+            print_system_info=print_system_info,
+        )
+
+        # Remove stored device information and replace with ours
+        if "policy_kwargs" in data:
+            if "device" in data["policy_kwargs"]:
+                del data["policy_kwargs"]["device"]
+
+        if "policy_kwargs" in kwargs and kwargs["policy_kwargs"] != data["policy_kwargs"]:
+            raise ValueError(
+                f"The specified policy kwargs do not equal the stored policy kwargs."
+                f"Stored kwargs: {data['policy_kwargs']}, specified kwargs: {kwargs['policy_kwargs']}"
+            )
+
+        if "observation_space" not in data or "action_space" not in data:
+            raise KeyError("The observation_space and action_space were not given, can't verify new environments")
+
+        # put state_dicts back in place
+        self.set_parameters(load_path_or_dict=params, exact_match=True, device=device)
+
+        # put other pytorch variables back in place
+        if pytorch_variables is not None:
+            for name in pytorch_variables:
+                # Skip if PyTorch variable was not defined (to ensure backward compatibility).
+                # This happens when using SAC/TQC.
+                # SAC has an entropy coefficient which can be fixed or optimized.
+                # If it is optimized, an additional PyTorch variable `log_ent_coef` is defined,
+                # otherwise it is initialized to `None`.
+                if pytorch_variables[name] is None:
+                    continue
+                # Set the data attribute directly to avoid issue when using optimizers
+                # See https://github.com/DLR-RM/stable-baselines3/issues/391
+                recursive_setattr(self, name + ".data", pytorch_variables[name].data)
+
+        # Sample gSDE exploration matrix, so it uses the right device
+        # see issue #44
+        if self.use_sde:
+            self.policy.reset_noise()  # pytype: disable=attribute-error
+        # return model
+
+    def set_parameters(
+        self,
+        load_path_or_dict: Union[str, Dict[str, Dict]],
+        exact_match: bool = True,
+        device: Union[th.device, str] = "auto",
+    ) -> None:
+        """
+        Load parameters from a given zip-file or a nested dictionary containing parameters for
+        different modules (see ``get_parameters``).
+
+        :param load_path_or_iter: Location of the saved data (path or file-like, see ``save``), or a nested
+            dictionary containing nn.Module parameters used by the policy. The dictionary maps
+            object names to a state-dictionary returned by ``torch.nn.Module.state_dict()``.
+        :param exact_match: If True, the given parameters should include parameters for each
+            module and each of their parameters, otherwise raises an Exception. If set to False, this
+            can be used to update only specific parameters.
+        :param device: Device on which the code should run.
+        """
+        params = None
+        if isinstance(load_path_or_dict, dict):
+            params = load_path_or_dict
+        else:
+            _, params, _ = load_from_zip_file(load_path_or_dict, device=device)
+
+        # Keep track which objects were updated.
+        # `_get_torch_save_params` returns [params, other_pytorch_variables].
+        # We are only interested in former here.
+        objects_needing_update = set(self._get_torch_save_params()[0])
+        updated_objects = set()
+
+        for name in params:
+            attr = None
+            try:
+                attr = recursive_getattr(self, name)
+            except Exception as e:
+                # What errors recursive_getattr could throw? KeyError, but
+                # possible something else too (e.g. if key is an int?).
+                # Catch anything for now.
+                raise ValueError(f"Key {name} is an invalid object name.") from e
+
+            if isinstance(attr, th.optim.Optimizer):
+                # Optimizers do not support "strict" keyword...
+                # Seems like they will just replace the whole
+                # optimizer state with the given one.
+                # On top of this, optimizer state-dict
+                # seems to change (e.g. first ``optim.step()``),
+                # which makes comparing state dictionary keys
+                # invalid (there is also a nesting of dictionaries
+                # with lists with dictionaries with ...), adding to the
+                # mess.
+                #
+                # TL;DR: We might not be able to reliably say
+                # if given state-dict is missing keys.
+                #
+                # Solution: Just load the state-dict as is, and trust
+                # the user has provided a sensible state dictionary.
+                attr.load_state_dict(params[name])
+            else:
+                # Assume attr is th.nn.Module
+                attr.load_state_dict(params[name], strict=exact_match)
+            updated_objects.add(name)
+
+        if exact_match and updated_objects != objects_needing_update:
+            raise ValueError(
+                "Names of parameters do not match agents' parameters: "
+                f"expected {objects_needing_update}, got {updated_objects}"
+            )
+
+class MyCustomCallback(EvalCallback):
+    model: RecurrentPPO
+    def __init__(self, model: RecurrentPPO, eval_env, cfg,training_env):
+        self.best_model_save_path = Path(cfg.dir_path) /cfg.best_model_save_path
+        self.best_model_save_path.mkdir(parents=True, exist_ok=True)
+        super().__init__(eval_env=eval_env, best_model_save_path=str(self.best_model_save_path),
+                         eval_freq=cfg.learn.eval_freq,
+                         log_path=Path(cfg.dir_path) / cfg.log_path)
+        self.model = model
+        self.logger = self.model.logger
+        self.eval_env = eval_env
+        self.verbose = self.model.verbose
+        assert isinstance(eval_env, VecNormalize), "eval_env 必须是 VecNormalize 类型"
+        self.unwrap_eval_env = eval_env.venv.envs[0].unwrapped
+        self.shared_env_data = self.unwrap_eval_env.env_data
+        self.training_env = training_env
+        self.cfg = cfg
+        self.eval_tripID_range = None
+        self.best_RMSE_err_reduction = -np.inf
+        self.eval_tripID_loop_range = None
+        self.eval_tripIDlist = None
+        self._last_RMSE_ll_err_reduction = None
+        self._last_RMSE_3D_err_reduction = None
+        self.eval_rl_3d_rmse = None
+        self.eval_rl_2d_rmse = None
+        self.eval_bl_3d_rmse = None
+        self.eval_bl_2d_rmse = None
+        if cfg.tune.enabled:
+            self.log_path = Path(cfg.dir_path) / cfg.log_path / f"TrialNum={cfg.tune.trial_num}"
+            self.best_model_save_path = Path(
+                cfg.dir_path) / cfg.best_model_save_path / f"TrialNum={cfg.tune.trial_num}"
+        else:
+            self.log_path = Path(cfg.dir_path) / cfg.log_path
+            self.best_model_save_path = Path(
+                cfg.dir_path) / cfg.best_model_save_path
+        print('logging in :',{self.best_model_save_path})
+
+    @property
+    def last_result_dict(self):
+        return {
+            '2D_RMSE': self._last_RMSE_ll_err_reduction,
+            '3D_RMSE': self._last_RMSE_3D_err_reduction,
+        }
+    def _rmse_callback (self ,_locals, _globals):
+        try:
+            infos = _locals.get('info', [])
+            dones = _locals.get('dones', [])
+
+            if len(infos) > 0:
+                done = dones[0]
+                rl_ll_err = infos['rl_ll_err']
+                rl_err = infos['error']
+                or_ll_err = infos['bl_ll_err']
+                or_err = infos['error_bl']
+                self.eval_rl_3d_rmse.append(rl_err)
+                self.eval_rl_2d_rmse.append(rl_ll_err)
+                self.eval_bl_3d_rmse.append(or_err)
+                self.eval_bl_2d_rmse.append(or_ll_err)
+                pass
+
+        except Exception as e:
+            print(f"Error in RMSE callback: {e}")
+        return
+    def on_training_end(self) -> None:
+        self._on_training_end()
+
+    def _on_training_end(self) -> None:
+        """
+        在训练结束时被调用。
+        """
+        self.model.writer.close()
+
+    def _on_step(self) -> bool:
+        """
+        在每次训练结束后被调用。
+        # 1. 用eval_callback库官方工具进行验证性能和保存操作
+        # 2. 验证模型，保存最佳模型
+        """
+        continue_training = True
+        # print("--- sb3自带EvalCallBack将驱动 ---")
+        # 打印自定义日志信息
+        if self.locals['log_interval'] is not None and self.model.iteration % self.locals['log_interval'] == 0:
+            time_elapsed = max((time.time_ns() - self.model.start_time) / 1e9, sys.float_info.epsilon)
+            fps = int((self.num_timesteps - self.model._num_timesteps_at_start) / time_elapsed)
+            per_iteration_indicator = {
+                "time/iterations": self.model.iteration,
+                "time/num_timesteps": self.num_timesteps,
+                "time/fps": fps,
+                "time/time_elapsed": int(time_elapsed),
+            }
+            self.logger.per_learning_end_record(per_iteration_indicator)
+            if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0:
+                self.logger.record("rollout/ep_rew_mean",
+                                   safe_mean([ep_info["r"] for ep_info in self.model.ep_info_buffer]))
+                self.logger.record("rollout/ep_len_mean",
+                                   safe_mean([ep_info["l"] for ep_info in self.model.ep_info_buffer]))
+            self.logger.dump(step=self.model.iteration)
+
+        # 验证
+        if self.eval_freq > 0 and self.model.iteration % self.eval_freq == 0:
+            # Sync training and eval env if there is VecNormalize
+            if self.model.get_vec_normalize_env() is not None:
+                try:
+                    sync_envs_normalization(self.training_env, self.eval_env)
+                except AttributeError as e:
+                    raise AssertionError(
+                        "Training and eval env are not wrapped the same way, "
+                        "see https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html#evalcallback "
+                        "and warning above."
+                    ) from e
+
+            # Reset
+            self._is_success_buffer = []
+            self.eval_rl_3d_rmse = []
+            self.eval_rl_2d_rmse = []
+            self.eval_bl_3d_rmse = []
+            self.eval_bl_2d_rmse = []
+
+            episode_rewards, episode_lengths = evaluate_policy(
+                self.model,
+                self.eval_env,
+                n_eval_episodes=self.n_eval_episodes,
+                render=self.render,
+                deterministic=self.deterministic,
+                return_episode_rewards=True,
+                warn=self.warn,
+                # callback=self._log_success_callback,
+                callback= self._rmse_callback,
+            )
+
+
+            if self.log_path is not None:
+                self.evaluations_timesteps.append(self.num_timesteps)
+                self.evaluations_results.append(episode_rewards)
+                self.evaluations_length.append(episode_lengths)
+
+                kwargs = {}
+                # Save success log if present
+                if len(self._is_success_buffer) > 0:
+                    self.evaluations_successes.append(self._is_success_buffer)
+                    kwargs = dict(successes=self.evaluations_successes)
+                os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+                np.savez(
+                    self.log_path,
+                    timesteps=self.evaluations_timesteps,
+                    results=self.evaluations_results,
+                    ep_lengths=self.evaluations_length,
+                    **kwargs,
+                )
+
+            mean_reward, std_reward = np.mean(episode_rewards), np.std(episode_rewards)
+            rl_err_rmse = np.sqrt((np.array(self.eval_rl_3d_rmse)**2).mean())
+            or_err_rmse = np.sqrt((np.array(self.eval_bl_3d_rmse)**2).mean())
+            rl_ll_rmse = np.sqrt((np.array(self.eval_rl_2d_rmse)**2).mean())
+            or_ll_rmse = np.sqrt((np.array(self.eval_bl_2d_rmse)**2).mean())
+            self._last_RMSE_ll_err_reduction = (or_ll_rmse - rl_ll_rmse) / (or_err_rmse +1e-6)
+            self._last_RMSE_3D_err_reduction = (or_err_rmse - rl_err_rmse) / (or_err_rmse+1e-6)
+            mean_ep_length, std_ep_length = np.mean(episode_lengths), np.std(episode_lengths)
+            self.last_mean_reward = mean_reward
+
+            if self.verbose >= 1:
+                print(
+                    f"Eval num_timesteps={self.num_timesteps}, " f"episode_reward={mean_reward: .2f} +/- {std_reward: .2f}")
+                print(f"Episode length: {mean_ep_length: .2f} +/- {std_ep_length: .2f}")
+            # Add to current Logger
+            self.logger.record("eval/mean_reward", float(mean_reward))
+            self.logger.record("eval/mean_ep_length", mean_ep_length)
+
+            if len(self._is_success_buffer) > 0:
+                success_rate = np.mean(self._is_success_buffer)
+                if self.verbose >= 1:
+                    print(f"Success rate: {100 * success_rate: .2f}%")
+                self.logger.record("eval/success_rate", success_rate)
+
+            # Dump log so the evaluation results are printed with the correct timestep
+            self.logger.record("time/total_timesteps", self.num_timesteps, exclude="tensorboard")
+            self.logger.dump(self.num_timesteps)
+
+            # 分别检查两个指标，分别保存最佳模型
+            model_saved = False
+
+            # 检查平均奖励是否创新高
+            if mean_reward > self.best_mean_reward:
+                if self.verbose >= 1:
+                    print("New best model by mean reward!")
+                if self.best_model_save_path is not None:
+                    self.model.writer.close()
+                    self.model.save(
+                        f"{self.best_model_save_path}/BestModel_MeanRW_Iter={self.model.iteration}_RWsetting={self.cfg.train_conf.reward_setting}_MeanRW={round(float(mean_reward), 3)}_Reduction={self._last_RMSE_ll_err_reduction * 100:.2f}%_Mode={self.cfg.vec_env_mode}.pth")
+                    self.logger.log("Saving new best model by mean reward to {}".format(self.best_model_save_path))
+                    self.model.writer = SummaryWriter(log_dir=self.model.tensorboard_log)
+                self.best_mean_reward = mean_reward
+                model_saved = True
+
+            # 检查RMSE减少率是否创新高
+            if self._last_RMSE_ll_err_reduction > self.best_RMSE_err_reduction:
+                if self.verbose >= 1:
+                    print("New best model by RMSE reduction!")
+                if self.best_model_save_path is not None:
+                    self.model.writer.close()
+                    self.model.save(
+                        f"{self.best_model_save_path}/BestModel_Reduction_Iter={self.model.iteration}_RWsetting={self.cfg.train_conf.reward_setting}_Reduction={self._last_RMSE_ll_err_reduction * 100:.2f}%_MeanRW={round(float(mean_reward), 3)}_Mode={self.cfg.vec_env_mode}.pth")
+                    self.logger.log("Saving new best model by RMSE reduction to {}".format(self.best_model_save_path))
+                    self.model.writer = SummaryWriter(log_dir=self.model.tensorboard_log)
+                self.best_RMSE_err_reduction = self._last_RMSE_ll_err_reduction
+                model_saved = True
+
+            # 只有当有新模型保存时才触发回调
+            if model_saved and self.callback_on_new_best is not None:
+                continue_training = self.callback_on_new_best.on_step()
+
+            # if mean_reward > self.best_mean_reward or self._last_RMSE_ll_err_reduction > self.best_RMSE_err_reduction:
+            #     if self.verbose >= 1:
+            #         print("New best model!")
+            #     if self.best_model_save_path is not None:
+            #         self.model.writer.close()
+            #         self.model.save(
+            #             f"{self.best_model_save_path}/BestModel_Iter={self.model.iteration}_RWsetting={self.cfg.train_conf.reward_setting}_MeanRW={round(float(mean_reward), 3)}_Reduction={self._last_RMSE_ll_err_reduction*100,5}_Mode={self.cfg.vec_env_mode}.pth")
+            #         self.logger.log("Saving new best model to {}".format(self.best_model_save_path))
+            #         self.model.writer = SummaryWriter(log_dir=self.model.tensorboard_log)
+            #     self.best_mean_reward = mean_reward
+            #     self.best_RMSE_err_reduction =self._last_RMSE_ll_err_reduction
+            #     # Trigger callback on new best model, if needed
+            #     if self.callback_on_new_best is not None:
+            #         continue_training = self.callback_on_new_best.on_step()
+
+            # Trigger callback after every evaluation, if needed
+            if self.callback is not None:
+                continue_training = continue_training and self._on_event()
+
+        return continue_training
+
+    def _on_training_start(self) -> None:
+        """
+        在整个训练开始前被调用。
+        TODO: 贝叶斯调参？Optuna调参？
+        """
+        if self.verbose > 0:
+            print("--- Training is about to begin ---")
+
+    def _on_rollout_start(self) -> None:
+        """
+        在每次 Rollout 收集开始前被调用。
+        """
+        self.num_timesteps = self.model.num_timesteps
+        self.training_env.env_method('reset_rollout_metrics')
+        if self.verbose > 1:
+            print(f"--- Starting new rollout at timestep: {self.num_timesteps} ---")
+
+    def _on_rollout_end(self) -> None:
+        """
+        在每次 Rollout 收集完成后，但在模型训练前被调用。
+        """
+        if self.verbose > 0:
+            print(f"--- Rollout finished, about to learn the model ---")
+
+
+        n_rollout_steps_indicator = {
+            # 这个保持不变，计算的是当前采集的这一批数据（Batch）的平均奖励
+            "values/rewards per step": np.mean(self.locals['rewards']),
+
+            # 修改为读取 Buffer 中的平均值
+            "values/a_rl positioning error per rollout": self.locals['infos'][0]['episode_mean_rl_error'],
+            "values/a_bl positioning error per rollout": self.locals['infos'][0]['episode_mean_bl_error'],
+
+            # tripid 依然读取最后一步的瞬时值，这通常没问题，用来观察当前跑到哪条轨迹了
+            "values/tripid": self.locals['infos'][0]['traj_idx'],
+
+            # 保持不变
+            "values/perepoch_logprob": self.locals['log_probs'].cpu().numpy().item(),
+        }
+
+        self.logger.per_rollout_step_record(n_rollout_steps_indicator)

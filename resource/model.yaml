@@ -1,0 +1,180 @@
+model:
+  RPPO:
+    policy: "MultiInputLstmPolicy"
+    verbose: ${ verbose }
+    seed: ${ seed }
+    n_epochs: 8
+    n_steps: 256
+    batch_size: 512 # 保持每个batch大概4~8个
+    gamma: 0.98
+    gae_lambda: 0.95
+    max_grad_norm: 0.6
+    sde_sample_freq: 8
+    target_kl: 0.03
+  policy:
+    pi_laynum: 6
+    pi_network_unit: 256
+    vf_laynum: 8
+    vf_network_unit: 512
+    #activation_fn: Mish
+    activation_fn: SiLU
+    use_sde: True
+    log_std_init: 1.442350477
+    squash_output: True
+env:
+  debug_r_terms: true
+  Q_static: false
+
+  train_env:
+    tripID_range_ratio: 1
+    episode_range_ratio: [ 0., 1. ]
+    triptype: 'trip_full'
+    continuous_action_scale: { 'pos': 7., 'vel': 1. }
+    continuous_actionspace: [ -100., 100. ]
+    reward_setting: 'HandMake_Rwd'
+    tripdata_sort: 'sorted'
+    baseline_mod: 'spp'
+    traj_len: 18
+    noise_scale_dic: { 'process': 1e-4,'measurement': 0.0653146498626093 }
+    conv_corr: 'conv_corr_1'
+    selfvel: False
+    step_print: False
+    verbose: ${ verbose }
+  eval_env:
+    tripID_range_ratio: 1
+    episode_range_ratio: [ 0., 1. ]
+    #triptype: 'traj_full'
+    continuous_action_scale: { 'pos': 7., 'vel': 1. }
+    continuous_actionspace: [ -100., 100. ]
+    reward_setting: 'HandMake_Rwd'
+    tripdata_sort: 'sorted'
+    baseline_mod: 'spp'
+    traj_len: 18
+    noise_scale_dic: { 'process': 1e-4,'measurement': 0.0653146498626093 }
+    conv_corr: 'conv_corr_1'
+    selfvel: False
+    step_print: False
+    verbose: ${ verbose }
+  test_env:
+    tripID_range_ratio: 1
+    episode_range_ratio: [ 0., 1. ]
+    continuous_action_scale: { 'pos': 7., 'vel': 1. }
+    continuous_actionspace: [ -100., 100. ]
+    reward_setting: 'HandMake_Rwd'
+    tripdata_sort: 'sorted'
+    baseline_mod: 'spp'
+    traj_len: 18
+    noise_scale_dic: { 'process': 1e-4,'measurement': 0.0653146498626093 }
+    conv_corr: 'conv_corr_1'
+    selfvel: False
+    step_print: False
+    verbose: ${ verbose }
+env_params:
+  # normalize parameters
+  # for 170 datasets lat [37.7770066, 34.1405127] lon [-118.315262, -122.4331823]
+  lat_min: 23.1419923966666
+  lat_max: 23.1848497849999
+  lon_min: 113.439967843333
+  lon_max: 113.52031935
+  # 79 trajs
+  xecef_normal: -2000000
+  yecef_normal: 5000000
+  zecef_normal: 2000000
+
+  xecef_min: -2344950
+  yecef_min: 5373925
+  zecef_min: 2471965
+  xecef_max: -2318450
+  yecef_max: 5393695
+  zecef_max: 2502528
+
+  # res_min=-200.55
+  # res_max=500.0
+  res_max: 1000000
+  losx_min: -0.975754418
+  losx_max: 0.621463432195474
+  losy_min: -0.229344003
+  losy_max: 0.987156913
+  losz_min: -0.718626583
+  losz_max: 0.878697739
+
+  # trajectory lengh
+  outlayer_in_end: 113
+  outlayer_in_end_ecef: 0
+
+  CN0_min: 20
+  CN0_max: 51
+  CN0_minmax: 15.800
+  CN0_maxmin: 45.400
+  CNO_distmin: 21.282
+  CNO_distmax: 46.283
+
+  PRU_min: 0.600
+  PRU_max: 149
+  PRU_minmax: 2.099
+  PRU_maxmin: 54.262
+  PRU_distmin: 0.897
+  PRU_distmax: 21.152
+
+  AA_min: 0.000
+  AA_max: 359.999
+  AA_minmax: 42.508
+  AA_maxmin: 317.554
+  AA_distmin: 24.960
+  AA_distmax: 338.317
+
+  EA_min: 0.262
+  EA_max: 1.2085
+  EA_minmax: 12.501
+  EA_maxmin: 67.262
+  EA_distmin: 7.675
+  EA_distmax: 68.257
+
+  Prate_min: -875.295
+  Prate_max: 952.739
+  Prate_minmax: -470.863
+  Prate_maxmin: 655.793
+  Prate_distmin: -558.267
+  Prate_distmax: 654.926
+
+  covx_max: 1.25
+  covx_min: -1.25
+  covv_max: 0.8
+  covv_min: -0.8
+
+  # define feature dimension
+  CN0PRUAAEA_num: 8  # 伪距残差+LOS（3D）+CN0+伪距不确定性+高度角+方位角
+  CN0PRUEA_num: 7  # 伪距残差+LOS（3D）+CN0+伪距不确定性+高度角
+  CN0EA_num: 6  # 伪距残差+LOS（3D）+CN0+高度角
+  CN0_num: 5  # 伪距残差+LOS（3D）+CN0
+  Prlos_num: 4
+  record_feature: True
+  outlier_velocity: 37  # m/s（国内最高限速33m/s）
+  interrupt_time: 3  # 中断时间
+  k_xy: 4.29
+  #only0620: False  # 只有0620的数据，这批数据有ublox
+  #if only0620:
+  #    sigma_v: 0.6 * 10
+  #else:
+  sigma_v: 0.6
+  sigma_x: 12.0  # default 12
+  initial_P: 352.168283223011
+  initial_V: 248.444992818349
+  sigma_m_pos: 22.2014540146364
+  sigma_m_vel: 3.16869196817363
+  sigma_a: 96.0931764293629
+  sigma_mahalanobis: 828.962122830359  # 异常测量检测
+  action_layout_with_vel:
+    dR_idx: [ 0, 1, 2 ,3, 4, 5,
+              6, 7, 8, 9, 10, 11,
+              12, 13, 14, 15, 16, 17,
+              18, 19, 20, 21, 22, 23,
+              24, 25, 26, 27, 28, 29,
+              30, 31, 32, 33, 34, 35, ]
+    dx_idx: [ 36,37,38 ]
+    dvel_idx: [ 39,40,41 ]
+  action_layout:
+    dR_idx: [ 0, 1, 2 ,
+              3, 4, 5,
+              6, 7, 8 ]
+    dx_idx: [ 9,10,11 ]

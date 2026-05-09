@@ -1,0 +1,5 @@
+# @package _group_
+data_truth_dic: 'raw_baseline_Haige_new_interupt_selfvel_9050.pkl'
+losfeature: 'processed_features_BDS_Haige_new_interupt_selfvel_9050.pkl'
+traj_sum_df: 'raw_tripID_BDS_Haige_new_interupt_selfvel_9050.csv'
+traj_sum_df_nocanyon: 'raw_tripID_BDS_Haige_new_interupt_selfvel_9050.csv'

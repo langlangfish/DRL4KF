@@ -1,0 +1,155 @@
+switch: # 互斥选项，四选一
+  description: "训练/测试/调参/读取"
+  train: false
+  test: false
+  tuning: false
+  read_db: true
+# TODO: 确定最佳超参 0620后总体step数：192261 / 验证step数： 6576 / 训练step数： 185685 / 轨迹数：229（221+8）/平均step数：840
+
+# --- Optional read_db ---
+read_db:
+  enabled: ${ switch.read_db }
+  description: "读取Optuna数据库最好超参数"
+  task: 'best_mean_err_reduction'
+  trial_timesteps: 309475
+  date: 20251108
+  study_name: ppo_recurrent_tuning_${.trial_timesteps}_${.date}
+  db_path: sqlite:////mnt/sdb/home/dingweizu/zhuangzx/HAIGE_KF_Refactoring/results/RL_optuna/RPPO_trial_${.trial_timesteps}_${.date}.db
+  read_lines_num: 30
+# --- Optional training ---
+train:
+  enabled: ${ switch.train }
+  description: "训练"
+  training_envs: 8 # 异步并行环境数
+  total_timesteps: 18568500 #
+  progress_bar: False
+  eval_freq: 185685 #验证频率默认//5
+  keep_alive: True
+  verbose: ${ verbose } # 0: no info, 1: 对象级开关与进程info 2: 对象方法级输入输出info
+
+  method_mode: "async_triptype" # 'async_triptype' | 'single_env'| 'async_episode'
+  test_type_list: [ 'trip_overpass','trip_openroad','trip_canyon','trip_highway','trip_forest' ]
+  #test_type_list: [ 'trip_overpass' ]
+  schedule:
+    enabled: ${ switch.train }         # 开/关学习率schedule（总开关）
+    description: "调度器schedule"
+    # ==== lr =========================================
+    lr:
+      mode: cosine_decent          # 可选: none | linear | cosine_decent/ascend | piecewise | steplr | static
+      start: 2e-05        # 仅 linear/cosine 有效（起始值，对应progress=1）
+      end: 1.5e-05          # 仅 linear/cosine 有效（结束值，对应progress=0）
+      piecewise: [ [ 0.8, 8.0e-05 ], [ 0.5, 4.0e-05 ], [ 0.2, 1.5e-05 ] ]
+      warmup_ratio: 0.03
+      # 仅 piecewise 模式使用：[[0.8, 8.0e-05], [0.5, 4.0e-05], [0.2, 1.5e-05]]
+    # ==== clip_range =================================
+    cr:
+      mode: linear
+      start: 0.2
+      end: 0.15
+      piecewise:
+        - [ 0.8, 0.20 ]
+        - [ 0.5, 0.17 ]
+        - [ 0.2, 0.15 ]
+
+    # ==== clip_range_vf ========================
+    #    cr_vf:
+    #      mode: linear
+    #      start: 0.39058020974782004
+    #      end: 0.05
+    #      piecewise:
+    #        - [ 0.8, 0.20 ]
+    #        - [ 0.5, 0.17 ]
+    #        - [ 0.2, 0.15 ]
+
+    # ==== ent_coef ===================================
+    ent:
+      mode: static
+      start: 0.001
+      end: 0.
+      piecewise:
+        - [ 0.99, 0.00560830220476074 ]
+        - [ 0.5, 0.001 ]
+        - [ 0.2, 0.000799819860520697 ]
+    # ==== vf_coef ====================================
+    vf:
+      mode: static
+      start: 10
+      end: 10
+      piecewise:
+        - [ 0.99, 10 ]
+        - [ 0.5, 100 ]
+        - [ 0.2, 100 ]
+    # ==== steplr ======================================
+    # steplr 仅在 mode=steplr 生效：
+    steplr:
+      step_size: 1200       # 每多少个optimizer step衰减一次（见说明）
+      gamma: 0.90
+
+# --- Optuna tuning (optional) ---
+tuning:
+  enabled: ${ switch.tuning }           # 打开调参：tuning.enabled=true
+  description: "Optuna调参"
+  task: 'last_mean_err_reduction' # 最佳指標或者最新指標作爲调优任务'best_mean_err_reduction' | 'last_mean_err_reduction'
+  result_pth: "/mnt/sdb/home/dingweizu/zhuangzx/HAIGE_KF_Refactoring/results/RL_optuna"
+  #  快速粗搜（Optuna）：total_timesteps = 102_400（约 6 小时/试验）。
+  #  足够越过“冷启动+早期学习”区间（~20k 步），能看见趋势分化并兼顾搜索吞吐。
+  #  常规精搜（Optuna）：total_timesteps = 204_800（约 24 小时/试验）。
+  #  在日志所示的持续改善阶段再延长一倍，减少“误剪优解”的风险。
+  #  TODO:最终收敛训练：total_timesteps = 500_000～1_000_000（约 18～22 小时）。
+  #  TODO:作为定型模型的长跑预算。若后续把 n_envs 提到 4 或 8，则 wall-time 能等比缩短。
+  trial_timesteps: 309475     # 实际是 num_timesteps 环境step数, 181248为当前所有训练数据集的step数
+  date: 20251108
+  n_trials: 100 # 尝试次数
+  trial_num: none
+  study_name: ppo_recurrent_tuning_${.trial_timesteps}_${.date}
+  storage: sqlite:////mnt/sdb/home/dingweizu/zhuangzx/HAIGE_KF_Refactoring/results/RL_optuna/RPPO_trial_${.trial_timesteps}_${.date}.db            # 如需持久化/断点续跑：sqlite:///results/optuna/ppo.db
+  load_if_exists: true
+  sampler: tpe             # tpe | random
+
+  # 选择启用的 pruner： hyperband | sha | median | none
+  pruner: hyperband
+
+  # —— Hyperband 专属参数（建议值如下，可按需覆盖）——
+  hb_min_resource: ${.trial_timesteps} # 表示最小训练资源（步数/迭代数）逻辑中//5
+  hb_max_resource: ${.trial_timesteps} # 一般等于每个 trial 的总迭代数
+  hb_reduction_factor: 3                # 每一层保存 1/r 的 trial；3~4 常用
+  hb_bootstrap_count: 5                 # 前几次trial不 prune，正常写 5
+
+  # —— 若改为 SHA（Successive Halving），也给一份可调参数 ——
+  sha_min_resource: auto
+  sha_reduction_factor: 3
+  sha_min_early_stopping_rate: 0
+
+  # —— MedianPruner 的常见参数（如改回 median 时用）——
+  n_startup_trials: 5
+  n_warmup_steps: ${.trial_timesteps} # 表示最小训练资源（步数/迭代数）逻辑中//10
+  interval_steps: ${.trial_timesteps} # 表示最小训练资源（步数/迭代数）逻辑中//20
+
+  repeats: 3
+  direction: maximize      # 我们要“越大越好”的 3D误差下降率（百分比）
+  n_jobs: 1
+  timeout: null            # 也可设一个总时长（秒），与 n_trials 二选一
+  progress_bar: true
+  seed_base: 42
+  overwrite_schedule: true # 调参时关闭 schedule，保证建议值被采用
+  params:
+    # ========默认参数，仅在optuna调参时打开,有可能被覆盖 ========================
+    #    clip_range_vf: 0.2
+    ent_coef: 0.001 # 熵正则参数，线性退火
+    clip_range: 0.2
+    learning_rate: 2e-5
+    vf_coef: 10. # 归一化后，数值为原来的-1000倍，设置10为vf_coef使之在熵探索结束后接管loss
+    # ============================================
+
+# --- Optional test ---
+test:
+  enabled: ${ switch.test } # test 模式会置为true
+  description: "测试"
+  traj_record: false
+  test_type_list: [ 'trip_overpass','trip_openroad','trip_canyon','trip_highway','trip_forest' ] # 任选1个场景测试或者全套测试
+  model_pth: "/mnt/sdb/home/dingweizu/zhuangzx/HAIGE_KF_Refactoring/results/best_models/train_20251016/gpu-0_ex-optuna_t1/seed-12/BestModel_Step=40960_2D_RMSE=26.477_Mode=hand_make_and_rwd.pth"
+  env_pth: "/mnt/sdb/home/dingweizu/zhuangzx/HAIGE_KF_Refactoring/results/best_models/train_20251016/gpu-0_ex-optuna_t1/seed-12/BestEnv_Step=40960_2D_RMSE=26.477_Mode=hand_make_and_rwd.pkl"
+  keep_alive: False
+  method_mode: "async_triptype" # 'async_triptype' | 'single_env'| 'async_episode'
+  eval_freq: 1 # test无用参数，为了与learn同类一致
+  verbose: ${ verbose } # 0: no info, 1: 对象级开关与进程info 2: 对象方法级输入输出info

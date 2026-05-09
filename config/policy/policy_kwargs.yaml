@@ -1,0 +1,5 @@
+# @package _group_
+pi_laynum: 2
+pi_network_unit: 128
+vf_laynum: 2
+vf_network_unit: 128

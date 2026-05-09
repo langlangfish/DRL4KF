@@ -1,0 +1,28 @@
+# @package _group_
+test_type_list: [ 'traj_openroad','traj_canyon','traj_overpass','traj_highway','traj_forest' ]
+#test_type_list: [ 'traj_overpass' ]
+#test_type_list: ['traj_0708']
+model_vec_type: "raw"
+best_model: "BestModel_Iter=6500"
+enabled: True
+#model_pth: '/mnt/sdb/home/dingweizu/langlangfish/Haigemodel/records_values/RLAKF_20251013_alltraining_selfvel/full_spp_losposKG_indomain/lr=3e-05_15000_size_128x2_XAS=2.0_KG_diagonal=0.005_KG_else=5e-09_conv_corr_1_ent=0.01_sv=1.6/RecurrentPPO_2/continuous_lstm_3e-05_15000.pth'
+#model_pth: '/mnt/sdb/home/dingweizu/langlangfish/long/logs/2025-12-16_17-16-22/best_model/BestModel_Reduction_Iter=500_RWsetting=RMSEmixratio_kf_tanh_Reduction=26.56%_MeanRW=360.679_Mode=raw.pth'
+model_pth : '/mnt/sdb/home/dingweizu/langlangfish/long/logs/2025-12-16_00-24-54/best_model/BestModel_Reduction_Iter=500_RWsetting=RMSEmixratio_kf_tanh_Reduction=26.53%_MeanRW=613.923_Mode=raw.pth'
+traj_record: True
+test_indomain:
+  tripid_range_ratio: 1
+  traj_ratio: [ 0.8,1.0 ]
+  continuous_action_scale: 2
+  continuous_actionspace: [ -100, 100 ]
+  reward_setting: 'RMSEmixratio_kf_tanh'
+  trajdata_sort: 'sorted'
+  baseline_mod: 'spp'
+  traj_len: 5
+#  noise_scale_dic: { 'process': 1e-4,'measurement': 1e-3 }
+  conv_corr: 'conv_corr_1'
+  kg_action_scale: {'diagonal': 5e-4,'up': 5e-9,'down':5e-6}
+#  kg_action_scale: {'diagonal': 5e-3,'else': 5e-9}
+  selfvel: False
+  step_print: False
+  allcorrect: True
+  Q_static : False

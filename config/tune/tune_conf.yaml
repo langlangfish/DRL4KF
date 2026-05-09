@@ -1,0 +1,56 @@
+# @package _group_
+enabled : False
+description: "Optuna调参"
+task: "RL4R66KF"
+#time : ${now:%Y-%m-%d_%H-%M-%S}
+exp_name: 'v1_baseline'
+result_pth: "/mnt/sdb/home/dingweizu/langlangfish/long/tune/${tune.exp_name}"
+#  快速粗搜（Optuna）：total_timesteps = 102_400（约 6 小时/试验）。
+#  足够越过“冷启动+早期学习”区间（~20k 步），能看见趋势分化并兼顾搜索吞吐。
+#  常规精搜（Optuna）：total_timesteps = 204_800（约 24 小时/试验）。
+#  在日志所示的持续改善阶段再延长一倍，减少“误剪优解”的风险。
+#  TODO:最终收敛训练：total_timesteps = 500_000～1_000_000（约 6～12 小时）。
+#  TODO:作为定型模型的长跑预算。若后续把 n_envs 提到 4 或 8，则 wall-time 能等比缩短。
+trial_timesteps: 1200 #204800     # 实际是 num_timesteps 环境step数
+n_trials: 50 # 尝试次数
+trial_num: none
+study_name: ppo_recurrent_tuning_${tune.trial_timesteps}
+#storage: sqlite:////mnt/sdb/home/dingweizu/langlangfish/long/tune/RPPO_trial_${tune.trial_timesteps}.db
+storage: sqlite:///${tune.result_pth}/RPPO_trial_${tune.trial_timesteps}.db
+# 如需持久化/断点续跑：sqlite:///results/optuna/ppo.db
+load_if_exists: true
+sampler: tpe             # tpe | random
+# 选择启用的 pruner： hyperband | sha | median | none
+pruner: hyperband
+
+# —— Hyperband 专属参数（建议值如下，可按需覆盖）——
+hb_min_resource: ${tune.trial_timesteps} # 表示最小训练资源（步数/迭代数）逻辑中//5
+hb_max_resource: ${tune.trial_timesteps} # 一般等于每个 trial 的总迭代数
+hb_reduction_factor: 3                # 每一层保存 1/r 的 trial；3~4 常用
+hb_bootstrap_count: 0                 # 前几次不 prune，正常写 0
+
+# —— 若改为 SHA（Successive Halving），也给一份可调参数 ——
+sha_min_resource: auto
+sha_reduction_factor: 3
+sha_min_early_stopping_rate: 0
+
+# —— MedianPruner 的常见参数（如改回 median 时用）——
+n_startup_trials: 5
+n_warmup_steps: ${tune.trial_timesteps} # 表示最小训练资源（步数/迭代数）逻辑中//10
+interval_steps: ${tune.trial_timesteps} # 表示最小训练资源（步数/迭代数）逻辑中//20
+
+repeats: 3
+direction: maximize      # 我们要“越大越好”的 3D误差下降率（百分比）
+n_jobs: 1
+timeout: null            # 也可设一个总时长（秒），与 n_trials 二选一
+progress_bar: true
+seed_base: 42
+overwrite_schedule: true # 调参时关闭 schedule，保证建议值被采用
+params:
+  # ========调度器参数，仅在optuna调参时打开 ========================
+  clip_range_vf: 0.2
+  ent_coef: 0.02 # 熵正则参数，线性退火
+  clip_range: 0.15
+  learning_rate: 5e-5
+  vf_coef: 100. # 归一化后，数值为原来的-1000倍，设置10为vf_coef使之在熵探索结束后接管loss
+  # ============================================

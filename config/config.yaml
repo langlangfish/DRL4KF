@@ -1,0 +1,40 @@
+defaults:
+  - data_path: data_selfvel_V2
+  - train_conf: train_env
+  - eval_conf: eval_env
+  - exclude_data: exclude_trip
+  - model: model_conf
+  - policy: policy_kwargs
+  - learn : learn
+  - test : test_conf
+  - tune : tune_conf
+  - read_db : read_db
+
+
+train_enabled: False
+random_seed: 1
+gpu_id: 0
+dir_path: '/mnt/sdb/home/dingweizu/langlangfish/long/'
+time: ${now:%Y-%m-%d_%H-%M-%S}
+#tensorboard_log_path: 'logs/${time}/tensorboard'
+tensorboard_log_path: 'logs/tune/tensorboard'
+log_path: 'logs/tune/log'
+#log_path: 'logs/${time}/log'
+
+#eval_path: 'logs/eval'
+#best_model_save_path: 'logs/${time}/best_model'
+best_model_save_path: 'logs/tune/best_model'
+#haige_train_step_num: 20000
+haige_learning_rate: 5e-5
+networkmod: "continuous_lstm"
+envmod: 'losposKG_vel_dt'
+vec_env_mode: 'raw'
+domain_select: 'indomain'
+is_multi_gpu: False
+ex: 0
+schedule: False
+#============
+test_log_path: None
+test_tensorboard_path: logs/${time}/test/tensorboard
+result_save_path: None
+result_type: '2D_RMSE'

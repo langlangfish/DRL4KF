@@ -1,0 +1,38 @@
+# @package _group_
+tripID_to_remove: [ "20250703-PM_2-forest1-0",
+                    "20250703-PM_1-openroad3-1",
+                    '20250703-PM_2-openroad3-1' ]
+
+exclude_canyon: [ '20250620-PM_1-canyon1-0',
+                  '20250620-PM_2-canyon1-0',
+                  '20250701-AM-canyon1-0',
+                  '20250701-AM-canyon3-0',
+                  '20250703-AM_1-canyon1-0',
+                  '20250703-AM_2-canyon1-0',
+                  '20250708-AM_1-canyon1-0',
+                  '20250708-AM_2-canyon1-0',
+                  '20250708-AM_2-canyon1-1',
+                  '20250708-PM_1-canyon1-0',
+                  '20250711_1-canyon1-0',
+                  '20250711_1-canyon2-0',
+                  '20250711_2-canyon1-0',
+                  '20250711_2-canyon2-0' ]
+without_full_traj: ['20250708-AM_2-forest1-0',
+            '20250708-AM_2-openroad1-0',
+            '20250708-AM_2-overpass1-0',
+            '20250708-AM_2-openroad2-0',
+            '20250708-AM_2-canyon1-0',
+            '20250708-AM_2-canyon1-1',
+            '20250708-AM_2-openroad3-0',
+            '20250708-AM_2-highway1-0',]
+#            '20250708-AM_2-overpass2-0',
+#            '20250708-AM_2-openroad4-0',
+#            '20250708-AM_1-forest1-0',
+#            '20250708-AM_1-openroad1-0',
+#            '20250708-AM_1-overpass1-0',
+#            '20250708-AM_1-openroad2-0',
+#            '20250708-AM_1-canyon1-0',
+#            '20250708-AM_1-openroad3-0',
+#            '20250708-AM_1-highway1-0',
+#            '20250708-AM_1-overpass2-0',
+#            '20250708-AM_1-openroad4-0',]

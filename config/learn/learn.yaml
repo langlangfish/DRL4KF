@@ -1,0 +1,5 @@
+# @package _group_
+total_timesteps : 5000
+eval_freq: 100
+progress_bar: True
+#schedule: False

@@ -1,0 +1,7 @@
+  # @package _group_
+  enabled: False
+  description: "读取Optuna数据库最好超参数"
+  trial_timesteps: 400
+  study_name: ppo_recurrent_tuning_${read_db.trial_timesteps}
+  db_path: sqlite:////mnt/sdb/home/dingweizu/langlangfish/long/tune/v1_baseline/RPPO_trial_${read_db.trial_timesteps}.db
+  read_lines_num: 20

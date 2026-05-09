@@ -1,0 +1,17 @@
+# @package _group_
+tripid_range_ratio: 1  # where are you, dragon friend?
+traj_ratio: [0.7, 0.8]
+traj_type: 'traj_full'
+continuous_action_scale: 20e-1
+continuous_actionspace: [ -100, 100 ]
+reward_setting: 'RMSEmixratio_kf_tanh'
+trajdata_sort: 'sorted'
+baseline_mod: 'spp'
+traj_len: 5
+kg_action_scale: {'diagonal': 5e-4,'up': 5e-9,'down':5e-6}
+#kg_action_scale: {'diagonal': 5e-3,'else': 5e-9}
+conv_corr: 'conv_corr_1'
+selfvel: False
+step_print: False
+allcorrect: True
+Q_static: False

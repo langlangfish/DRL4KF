@@ -1,13 +1,12 @@
-<center>
+<h1 align="center">基于RecurrentPPO的AKF紧耦合GNSS单点定位增强系统 🛰️</h1>
+<h3 align="center">Robust PPO-aided Adaptive Kalman Filter for Single Point Positioning</h3>
 
-## 基于RecurrentPPO的AKF紧耦合GNSS单点定位增强系统 🛰️
-### Robust PPO-aided Adaptive Kalman Filter for Single Point Positioning
-
-![Python](https://img.shields.io/badge/PYTHON-3.8+-0072B2?logo=python&logoColor=white)
-![RL](https://img.shields.io/badge/RL-STABLE%20BASELINES3-800080)
-![Config](https://img.shields.io/badge/CONFIG-HYDRA-FF7F0E)
-![Tuning](https://img.shields.io/badge/TUNING-OPTUNA-0072B2)
-</center>
+<p align="center">
+  <img src="https://img.shields.io/badge/PYTHON-3.8+-0072B2?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/RL-STABLE%20BASELINES3-800080" alt="RL">
+  <img src="https://img.shields.io/badge/CONFIG-HYDRA-FF7F0E" alt="Config">
+  <img src="https://img.shields.io/badge/TUNING-OPTUNA-0072B2" alt="Tuning">
+</p>
 
 ## 📖 项目介绍
 本项目为国家自然科学基金（No. 62320106008）资助项目，由北斗 PNT 实验室与企业技术委托合作开发。
